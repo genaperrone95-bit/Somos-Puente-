@@ -23,6 +23,7 @@
     --line:#e4d6ae;
   }
   *{box-sizing:border-box;}
+  html, body{overflow-x:hidden; max-width:100%;}
   body{
     margin:0;
     background:var(--bg);
@@ -299,6 +300,7 @@
     color:var(--ink-soft);
     line-height:1.55;
     margin:6px 0 12px;
+    overflow-wrap:anywhere;
   }
 
   .caret{
@@ -314,7 +316,7 @@
     overflow:hidden;
     transition:max-height .35s ease;
   }
-  .stage.open .checklist{max-height:400px;}
+  .stage.open .checklist{max-height:3000px;}
   .checklist-inner{padding-top:4px; border-top:1px dashed var(--line);}
   .item{
     display:flex;
@@ -380,6 +382,8 @@
     border-radius:12px;
     padding:12px 14px;
     white-space:pre-wrap;
+    overflow-wrap:anywhere;
+    word-break:break-word;
   }
   .notes-view.empty{color:var(--ink-soft); font-style:italic;}
   .notes-edit{
@@ -393,6 +397,8 @@
     line-height:1.6;
     color:var(--ink);
     resize:vertical;
+    overflow-wrap:anywhere;
+    word-break:break-word;
   }
   .notes-edit:focus{outline:none; border-color:var(--stage-color);}
   .notes-save-state{
@@ -623,9 +629,53 @@
     margin-top:8px;
   }
 
-  @media (max-width:420px){
-    .hero-name{font-size:23px;}
-    .card-title{font-size:26px;}
+  @media (max-width:600px){
+    .app{padding:18px 14px 60px;}
+
+    .brandbar{gap:8px;}
+    .wordmark-img{height:22px;}
+    .studio-toggle{flex-wrap:wrap; gap:6px; justify-content:flex-end;}
+    .studio-btn{font-size:10.5px; padding:5px 9px;}
+
+    .hero{padding:20px 16px 18px; border-radius:18px;}
+    .hero-name{font-size:22px;}
+    .hero-greeting{font-size:12px;}
+
+    .setup-row{flex-direction:column; align-items:stretch;}
+    .setup-row button{width:100%;}
+
+    .progress-labels{font-size:11px;}
+    .current-stage-chip{font-size:11.5px;}
+
+    .stage{padding-left:42px; padding-bottom:30px;}
+    .node{width:32px; height:32px; font-size:13px;}
+    .stage-line{left:15px;}
+    .stage-line svg{width:32px; left:-15px;}
+
+    .card{padding:15px 14px 14px;}
+    .card-title{font-size:24px;}
+    .card-top{flex-wrap:wrap;}
+    .status-pill{font-size:10px; padding:3px 8px;}
+
+    .res-card{flex-wrap:wrap;}
+    .res-icon{width:26px; height:26px; font-size:12px;}
+
+    .panel-box{padding:16px; border-radius:16px; max-width:100%;}
+    .panel-title{font-size:17px;}
+    .panel-add{flex-direction:column;}
+    .panel-add button{width:100%;}
+    .panel-avatar{width:32px; height:32px; font-size:12px;}
+    .panel-name{font-size:13px;}
+    .panel-stage{font-size:11px;}
+
+    .footer img{height:36px;}
+  }
+
+  @media (max-width:380px){
+    .hero-name{font-size:20px;}
+    .card-title{font-size:22px;}
+    .wordmark-img{height:19px;}
+    .tagline{font-size:10px;}
   }
 </style>
 </head>
@@ -948,7 +998,7 @@
                   <textarea class="notes-edit" data-stage="${stage.id}" placeholder="Dejale una anotación a tu cliente sobre esta etapa...">${state[stage.id].note}</textarea>
                   <div class="notes-save-state" data-savefor="${stage.id}"></div>
                 ` : `
-                  <div class="notes-view ${state[stage.id].note ? '' : 'empty'}">${state[stage.id].note ? escapeHTML(state[stage.id].note) : 'Tu coach todavía no dejó notas para esta etapa.'}</div>
+                  <div class="notes-view ${state[stage.id].note ? '' : 'empty'}">${state[stage.id].note ? linkifyNotes(state[stage.id].note) : 'Tu coach todavía no dejó notas para esta etapa.'}</div>
                 `}
               </div>
               <div class="res-block">
@@ -982,6 +1032,16 @@
       `;
       tl.appendChild(wrap);
     });
+
+    // Measure the real content height of the open stage so it's never clipped,
+    // no matter how many notes/resources it has.
+    if(openStage){
+      const openChecklist = tl.querySelector(`.stage.open .checklist`);
+      const openInner = tl.querySelector(`.stage.open .checklist-inner`);
+      if(openChecklist && openInner){
+        openChecklist.style.maxHeight = (openInner.scrollHeight + 24) + 'px';
+      }
+    }
 
     // bind card open/close
     tl.querySelectorAll('.card').forEach(card=>{
@@ -1069,6 +1129,17 @@
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+  }
+
+  function linkifyNotes(str){
+    const escaped = escapeHTML(str);
+    return escaped.replace(/(https?:\/\/[^\s<]+)/g, (url)=>{
+      // strip trailing punctuation that's likely not part of the URL
+      const trailing = url.match(/[.,;:)\]]+$/);
+      const clean = trailing ? url.slice(0, -trailing[0].length) : url;
+      const tail = trailing ? trailing[0] : '';
+      return `<a href="${clean}" target="_blank" rel="noopener noreferrer" style="color:var(--stage-color); text-decoration:underline;">${clean}</a>${tail}`;
+    });
   }
 
   $('panelBtn').addEventListener('click', openPanel);
