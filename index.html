@@ -165,6 +165,15 @@
   }
   .setup-row button:hover{background:#c23f18;}
 
+  .login-error{
+    display:none;
+    margin-top:8px;
+    font-size:12px;
+    color:#ffd7c4;
+    font-weight:600;
+  }
+  .login-error.show{display:block;}
+
   .progress-wrap{margin-top:18px;}
   .progress-labels{
     display:flex;
@@ -552,6 +561,23 @@
     color:var(--forest);
     white-space:nowrap;
   }
+  .panel-actions{
+    display:flex;
+    gap:4px;
+    flex-shrink:0;
+  }
+  .panel-action-btn{
+    width:28px; height:28px;
+    border-radius:8px;
+    border:1.5px solid var(--line);
+    background:var(--paper);
+    font-size:13px;
+    cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+    color:var(--ink-soft);
+  }
+  .panel-action-btn:hover{background:var(--cream); border-color:var(--forest); color:var(--forest);}
+  .panel-action-btn.danger:hover{border-color:var(--orange); color:var(--orange);}
   .panel-add{
     display:flex;
     gap:8px;
@@ -634,9 +660,10 @@
     </div>
 
     <div class="setup-row" id="setupRow">
-      <input id="clientInput" type="text" placeholder="Escribí tu nombre o el de tu marca..." />
-      <button id="setClientBtn">Entrar</button>
+      <input id="clientInput" type="text" placeholder="Tu nombre y apellido..." />
+      <button id="setClientBtn">Ingresar</button>
     </div>
+    <div class="login-error" id="loginError"></div>
 
     <div class="progress-wrap" id="progressWrap" style="display:none;">
       <div class="progress-labels">
@@ -1091,14 +1118,43 @@
     }
   }
 
+  async function attemptClientLogin(name){
+    if(!DB_CONNECTED){
+      $('loadingNote').textContent = 'El portal todavía no está conectado a la base de datos.';
+      return;
+    }
+    const slug = slugify(name);
+    if(!slug) return;
+    $('loginError').classList.remove('show');
+    $('setClientBtn').disabled = true;
+    $('loadingNote').textContent = 'Verificando...';
+    try{
+      const { data, error } = await sb.from('progress').select('slug').eq('slug', slug).maybeSingle();
+      if(error) throw error;
+      $('loadingNote').textContent = '';
+      if(!data){
+        $('loginError').textContent = 'No encontramos ese usuario. Verificá que esté bien escrito o consultá con tu estudio.';
+        $('loginError').classList.add('show');
+        $('setClientBtn').disabled = false;
+        return;
+      }
+      await loadClientBySlug(slug, name);
+    }catch(e){
+      $('loadingNote').textContent = '';
+      $('loginError').textContent = 'Hubo un problema al verificar tu usuario. Probá de nuevo.';
+      $('loginError').classList.add('show');
+    }
+    $('setClientBtn').disabled = false;
+  }
+
   $('setClientBtn').addEventListener('click', ()=>{
     const val = $('clientInput').value.trim();
-    if(val) loadClient(val);
+    if(val) attemptClientLogin(val);
   });
   $('clientInput').addEventListener('keydown', (e)=>{
     if(e.key === 'Enter'){
       const val = $('clientInput').value.trim();
-      if(val) loadClient(val);
+      if(val) attemptClientLogin(val);
     }
   });
 
@@ -1170,13 +1226,105 @@
           <div class="panel-stage">Etapa: ${escapeHTML(curLabel)}</div>
         </div>
         <div class="panel-pct">${pct}%</div>
+        ${editorMode ? `
+          <div class="panel-actions">
+            <button class="panel-action-btn" data-action="edit" data-slug="${slug}" data-name="${escapeHTML(name)}" title="Editar">✎</button>
+            <button class="panel-action-btn danger" data-action="delete" data-slug="${slug}" data-name="${escapeHTML(name)}" title="Borrar">🗑️</button>
+          </div>
+        ` : ''}
       `;
-      row.addEventListener('click', ()=>{
+      row.addEventListener('click', (e)=>{
+        if(e.target.closest('.panel-action-btn')) return;
         closePanel();
         loadClientBySlug(slug, name);
       });
       body.appendChild(row);
     });
+
+    if(editorMode){
+      body.querySelectorAll('.panel-action-btn[data-action="edit"]').forEach(btn=>{
+        btn.addEventListener('click', (e)=>{
+          e.stopPropagation();
+          editClient(btn.getAttribute('data-slug'), btn.getAttribute('data-name'));
+        });
+      });
+      body.querySelectorAll('.panel-action-btn[data-action="delete"]').forEach(btn=>{
+        btn.addEventListener('click', (e)=>{
+          e.stopPropagation();
+          deleteClientRow(btn.getAttribute('data-slug'), btn.getAttribute('data-name'));
+        });
+      });
+    }
+  }
+
+  async function editClient(slug, currentName){
+    const newName = window.prompt('Nuevo nombre y apellido para este cliente:', currentName);
+    if(newName === null) return;
+    const trimmed = newName.trim();
+    if(!trimmed) return;
+    const newSlug = slugify(trimmed);
+    if(!newSlug) return;
+
+    try{
+      const { data: rowData, error: fetchErr } = await sb.from('progress').select('data').eq('slug', slug).maybeSingle();
+      if(fetchErr) throw fetchErr;
+      if(!rowData) return;
+      const clientData = rowData.data;
+      if(!clientData._meta) clientData._meta = {};
+      clientData._meta.name = trimmed;
+      clientData._meta.updatedAt = Date.now();
+
+      if(newSlug === slug){
+        // name text changed but login slug is the same — just update in place
+        const { error } = await sb.from('progress').upsert({slug, data: clientData, updated_at: new Date().toISOString()});
+        if(error) throw error;
+      }else{
+        // slug changes → check it doesn't collide with another existing client
+        const { data: collision, error: collErr } = await sb.from('progress').select('slug').eq('slug', newSlug).maybeSingle();
+        if(collErr) throw collErr;
+        if(collision){
+          alert('Ya existe otro cliente con ese nombre. Elegí un nombre distinto.');
+          return;
+        }
+        const { error: insErr } = await sb.from('progress').insert({slug: newSlug, data: clientData, updated_at: new Date().toISOString()});
+        if(insErr) throw insErr;
+        const { error: delErr } = await sb.from('progress').delete().eq('slug', slug);
+        if(delErr) throw delErr;
+        if(clientSlug === slug){
+          clientSlug = newSlug;
+          updateHash(newSlug);
+          rememberLastClient(newSlug);
+        }
+      }
+      loadPanelList();
+    }catch(e){
+      alert('No se pudo editar el cliente. Probá de nuevo.');
+    }
+  }
+
+  async function deleteClientRow(slug, name){
+    const confirmed = window.confirm(`¿Seguro que querés borrar a "${name}"? Se va a perder todo su progreso, notas y archivos. Esta acción no se puede deshacer.`);
+    if(!confirmed) return;
+    try{
+      const { error } = await sb.from('progress').delete().eq('slug', slug);
+      if(error) throw error;
+      if(clientSlug === slug){
+        clientSlug = null;
+        clearHash();
+        $('setupRow').style.display = 'flex';
+        $('progressWrap').style.display = 'none';
+        $('timeline').style.display = 'none';
+        $('backToPanelWrap').style.display = 'none';
+        $('greetingName').textContent = 'Hola 👋';
+      }
+      loadPanelList();
+    }catch(e){
+      alert('No se pudo borrar el cliente. Probá de nuevo.');
+    }
+  }
+
+  function clearHash(){
+    try{ history.replaceState(null, '', location.pathname + location.search); }catch(e){ /* ignore */ }
   }
 
   $('panelAddBtn').addEventListener('click', ()=>{
