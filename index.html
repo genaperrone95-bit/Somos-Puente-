@@ -6,6 +6,7 @@
 <title>Somos Puente — Tu Proceso</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Sacramento&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
   :root{
     --cream:#f7dfb9;
@@ -732,6 +733,13 @@
 
   const STUDIO_PIN = 'puente2026'; // cambiá esta clave por la que quieras usar con tu equipo
 
+  // ---------- CONEXIÓN A SUPABASE ----------
+  // Pegá acá tu Project URL y tu clave "anon public" (Project Settings → API en Supabase).
+  const SUPABASE_URL = 'https://zpxjurkyiiiqcuwnbhcd.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpweGp1cmt5aWlpcWN1d25iaGNkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY5OTA3OTUsImV4cCI6MjEwMjU2Njc5NX0.mGxwmux1MuV4pCOk8Atr5EOpLP0r2oiGyKWwSp_UBu8';
+  const DB_CONNECTED = SUPABASE_URL.startsWith('http') && !SUPABASE_ANON_KEY.startsWith('PEGÁ');
+  const sb = DB_CONNECTED ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+
   let clientSlug = null;
   let state = {}; // { identidad: {checks:{0:true,...}, note:'...'}, ... }
   let openStage = null;
@@ -746,14 +754,21 @@
       .replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');
   }
 
-  function storageKey(slug){ return 'progress:' + slug; }
+  const LAST_CLIENT_KEY = 'somospuente_last_client';
 
   function updateHash(slug){
-    history.replaceState(null, '', '#c=' + slug);
+    try{ history.replaceState(null, '', '#c=' + slug); }catch(e){ /* ignore */ }
   }
 
-  function clearHash(){
-    history.replaceState(null, '', location.pathname + location.search);
+  function rememberLastClient(slug){
+    // Sitio propio ahora (no un Artifact de Claude), así que localStorage es apropiado:
+    // recuerda, solo en este navegador/dispositivo, cuál fue el último cliente abierto.
+    try{ localStorage.setItem(LAST_CLIENT_KEY, slug); }catch(e){ /* non-critical */ }
+  }
+
+  function getLastClient(){
+    try{ return localStorage.getItem(LAST_CLIENT_KEY); }
+    catch(e){ return null; }
   }
 
   function showClientView(){
@@ -769,13 +784,18 @@
   }
 
   async function loadClientBySlug(slug, fallbackName){
+    if(!DB_CONNECTED){
+      $('loadingNote').textContent = 'El portal todavía no está conectado a la base de datos. Avisá a tu estudio.';
+      return;
+    }
     clientSlug = slug;
     $('loadingNote').textContent = 'Cargando tu proceso...';
     showClientView();
 
     try{
-      const res = await window.storage.get(storageKey(clientSlug), true);
-      state = res && res.value ? JSON.parse(res.value) : {};
+      const { data, error } = await sb.from('progress').select('data').eq('slug', clientSlug).maybeSingle();
+      if(error) throw error;
+      state = (data && data.data) ? data.data : {};
     }catch(e){
       state = {};
     }
@@ -791,13 +811,22 @@
     $('greetingName').textContent = 'Hola, ' + state._meta.name + ' 👋';
     $('loadingNote').textContent = '';
     updateHash(clientSlug);
+    rememberLastClient(clientSlug);
+    // persist immediately so a brand-new client isn't lost if nothing gets checked yet
+    saveState();
     render();
   }
 
   async function saveState(){
+    if(!DB_CONNECTED) return;
     state._meta.updatedAt = Date.now();
     try{
-      await window.storage.set(storageKey(clientSlug), JSON.stringify(state), true);
+      const { error } = await sb.from('progress').upsert({
+        slug: clientSlug,
+        data: state,
+        updated_at: new Date().toISOString()
+      });
+      if(error) throw error;
     }catch(e){
       $('loadingNote').textContent = 'No se pudo guardar. Probá de nuevo.';
     }
@@ -1088,23 +1117,18 @@
 
   async function loadPanelList(){
     const body = $('panelBody');
+    if(!DB_CONNECTED){
+      body.innerHTML = '<div class="panel-empty">El portal todavía no está conectado a la base de datos.</div>';
+      return;
+    }
     body.innerHTML = '<div class="panel-loading">Cargando clientes...</div>';
     let entries = [];
     try{
-      const listRes = await window.storage.list('progress:', true);
-      const keys = (listRes && listRes.keys) ? listRes.keys : [];
-      for(const k of keys){
-        try{
-          const res = await window.storage.get(k, true);
-          if(!res || !res.value) continue;
-          const data = JSON.parse(res.value);
-          const slug = k.replace(/^progress:/, '');
-          entries.push({slug, data});
-        }catch(e){ /* skip broken entry */ }
-      }
+      const { data, error } = await sb.from('progress').select('slug, data, updated_at').order('updated_at', {ascending:false});
+      if(error) throw error;
+      entries = (data || []).map(row => ({slug: row.slug, data: row.data}));
     }catch(e){
-      body.innerHTML = '<div class="panel-empty">No se pudo cargar la lista de clientes.</div>';
-      return;
+      entries = [];
     }
 
     if(entries.length === 0){
@@ -1170,13 +1194,21 @@
     openPanel();
   });
 
-  // ---------- INIT: restore client from URL hash if present ----------
+  // ---------- INIT: restore client from URL hash, or fall back to last-viewed ----------
   (function init(){
+    if(!DB_CONNECTED){
+      $('loadingNote').textContent = '⚠️ Falta conectar la base de datos (Supabase) en el código del portal.';
+    }
     const hash = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash;
     const params = new URLSearchParams(hash);
     const slugFromHash = params.get('c');
     if(slugFromHash){
       loadClientBySlug(slugFromHash);
+      return;
+    }
+    const last = getLastClient();
+    if(last){
+      loadClientBySlug(last);
     }
   })();
 })();
