@@ -781,21 +781,8 @@
       .replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');
   }
 
-  const LAST_CLIENT_KEY = 'somospuente_last_client';
-
   function updateHash(slug){
     try{ history.replaceState(null, '', '#c=' + slug); }catch(e){ /* ignore */ }
-  }
-
-  function rememberLastClient(slug){
-    // Sitio propio ahora (no un Artifact de Claude), así que localStorage es apropiado:
-    // recuerda, solo en este navegador/dispositivo, cuál fue el último cliente abierto.
-    try{ localStorage.setItem(LAST_CLIENT_KEY, slug); }catch(e){ /* non-critical */ }
-  }
-
-  function getLastClient(){
-    try{ return localStorage.getItem(LAST_CLIENT_KEY); }
-    catch(e){ return null; }
   }
 
   function showClientView(){
@@ -838,7 +825,6 @@
     $('greetingName').textContent = 'Hola, ' + state._meta.name + ' 👋';
     $('loadingNote').textContent = '';
     updateHash(clientSlug);
-    rememberLastClient(clientSlug);
     // persist immediately so a brand-new client isn't lost if nothing gets checked yet
     saveState();
     render();
@@ -1293,7 +1279,6 @@
         if(clientSlug === slug){
           clientSlug = newSlug;
           updateHash(newSlug);
-          rememberLastClient(newSlug);
         }
       }
       loadPanelList();
@@ -1347,17 +1332,10 @@
     if(!DB_CONNECTED){
       $('loadingNote').textContent = '⚠️ Falta conectar la base de datos (Supabase) en el código del portal.';
     }
-    const hash = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash;
-    const params = new URLSearchParams(hash);
-    const slugFromHash = params.get('c');
-    if(slugFromHash){
-      loadClientBySlug(slugFromHash);
-      return;
-    }
-    const last = getLastClient();
-    if(last){
-      loadClientBySlug(last);
-    }
+    // A propósito: cada vez que se entra o se refresca la página, arranca en la
+    // pantalla de login. No se restaura ninguna sesión anterior por URL ni por
+    // dispositivo — cada visita empieza sin usuario cargado.
+    clearHash();
   })();
 })();
 </script>
